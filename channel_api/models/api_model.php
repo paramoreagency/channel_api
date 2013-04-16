@@ -1,0 +1,612 @@
+<?php  if (! defined('BASEPATH')) exit('No direct script access allowed');
+
+/**
+ * ExpressionEngine - by EllisLab
+ *
+ * @package     ExpressionEngine
+ * @author      ExpressionEngine Dev Team
+ * @copyright   Copyright (c) 2003 - 2011, EllisLab, Inc.
+ * @license     http://expressionengine.com/user_guide/license.html
+ * @link        http://expressionengine.com
+ * @since       Version 2.0
+ * @filesource
+ */
+
+class Api_model
+{
+    public $EE;
+
+    /**
+     * @var object
+     */
+    protected $channel = NULL;
+
+    /**
+     * @var int
+     */
+    protected $entry_id = NULL;
+
+    /**
+     * @var string
+     */
+    protected $field = NULL;
+
+    /**
+     * @var array
+     */
+    protected $params = array(
+        'order_by' => 'entry_id',
+        'sort' => 'DESC',
+        'limit' => FALSE,
+        'offset' => 0
+    );
+
+    /**
+     * Constructor
+     */
+    public function __construct()
+    {
+        $this->EE =& get_instance();
+        $this->EE->load->model('error_response');
+        $this->EE->load->driver('channel_data');
+        $this->EE->api->instantiate('channel_fields');
+        $this->EE->api->instantiate('channel_entries');
+    }
+
+    /**
+     * @param string $channel_name
+     * @return void
+     */
+    public function set_channel($channel_name)
+    {
+        if ($channel_name)
+            $this->channel = $this->EE->channel_data->get_channel_by_name($channel_name)->row();
+    }
+
+    /**
+     * @param int $entry_id
+     */
+    public function set_entry_id($entry_id)
+    {
+        $this->entry_id = $entry_id;
+    }
+
+    /**
+     * @param string $field
+     */
+    public function set_field($field)
+    {
+        $this->field = $field;
+    }
+
+    /**
+     * @param array $params
+     */
+    public function set_params($params)
+    {
+        $this->params = $params;
+    }
+
+    /**
+     * @return bool
+     */
+    private function channel_exists()
+    {
+        return (is_object($this->channel)) ? TRUE : FALSE;
+    }
+
+    /**
+     * @return array
+     * @throws exception
+     */
+    public function channel_get()
+    {
+        if ($this->field)
+            return $this->fetch_related_entries(
+                $this->channel,
+                $this->entry_id,
+                $this->channel . '_' . $this->field
+            );
+
+        elseif ($this->entry_id)
+            return $this->fetch_entry($this->entry_id);
+
+        elseif ($this->channel)
+            return $this->list_entries();
+
+        else
+            throw new Exception($this->EE->lang->line('error_no_channel'), 400);
+    }
+
+    /**
+     * @return array
+     */
+    private function fetch_related_entries()
+    {
+        $parent = $this->fetch_entry($this->entry_id);
+        $related_entries = array();
+
+        if (is_array($parent) AND isset($parent[$this->field])) {
+            $children = $parent[$this->field];
+
+            if (! is_array($children))
+                $children = array($children);
+
+            foreach ($children as $child)
+                $related_entries[] = $this->EE->channel_data
+                  ->get_channel_entry($child['entry_id'])
+                  ->row_array();
+        }
+
+        return $related_entries;
+    }
+
+    /**
+     * @param $entry_id
+     * @param bool $search_by_channel
+     * @return array
+     */
+    private function fetch_entry($entry_id, $search_by_channel = TRUE)
+    {
+        $result = array();
+
+        if (! $this->is_valid_get_request()) return array();
+
+        if ($search_by_channel)
+            $entry = $this->EE->channel_data
+              ->get_channel_entry_in_channel($entry_id, $this->channel->channel_id)
+              ->row_array();
+        else
+            $entry = $this->EE->channel_data
+              ->get_channel_entry($entry_id)
+              ->row_array();
+
+        if (! empty($entry))
+            $result = $this->parse_third_party_field_types($entry);
+
+        else
+            $this->EE->error_response
+              ->set_http_response_code(400)
+              ->set_error($this->EE->lang->line('error_no_entry'));
+
+        return $result;
+    }
+
+    /**
+     * @param $entry_ids
+     * @return array
+     */
+    private function fetch_entries_by_ids($entry_ids)
+    {
+        if (empty($entry_ids)) return array();
+
+        $fields = $this->get_fields_by_site();
+        $fields_array = array();
+
+        $select = array(
+            'exp_channel_titles.entry_id',
+            'exp_channel_titles.channel_id',
+            'exp_channel_titles.title',
+            'exp_channel_titles.url_title',
+            'exp_channel_titles.entry_date',
+            'exp_channel_titles.author_id'
+        );
+
+        foreach ($fields as $field) {
+            if ($field->field_type == "matrix")
+                $select[] = 'exp_channel_data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '[matrix]\'';
+            elseif ($field->field_type == "playa")
+                $select[] = 'exp_channel_data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '[playa]\'';
+            else
+                $select[] = 'exp_channel_data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '\'';
+
+            $fields_array[$field->field_name] = 'field_id_' . $field->field_id;
+        }
+
+        $sql  = 'SELECT ' . implode(', ', $select) . ' '
+          . 'FROM exp_channel_titles '
+          . 'JOIN exp_channel_data ON exp_channel_data.entry_id = exp_channel_titles.entry_id '
+          . 'WHERE exp_channel_data.entry_id IN (' . implode(', ', $entry_ids) . ')'
+          . (($this->params['order_by']) ? ' ORDER BY ' . $this->params['order_by'] : '')
+          . (($this->params['limit']) ? ' LIMIT ' . $this->params['limit'] : '');
+
+        $query = $this->EE->db->query($sql);
+
+        return $query->result_array();
+    }
+
+    /**
+     * @return mixed
+     */
+    private function get_fields_by_site()
+    {
+        $site_id = $this->EE->config->item('site_id');
+        $fields = $this->EE->db->query("SELECT * FROM exp_channel_fields WHERE site_id = {$site_id}")->result();
+
+        return $fields;
+    }
+
+    /**
+     * @return array
+     */
+    public function list_entries()
+    {
+        if (! $this->is_valid_get_request()) return array();
+
+        $entries = $this->EE->channel_data
+          ->get_channel_entries(
+              $this->channel->channel_id,
+              array(), #select (default = *)
+              array(), #where
+              $this->params['order_by'],
+              $this->params['sort'],
+              $this->params['limit'],
+              $this->params['offset'])
+          ->result_array();
+
+        foreach($entries as &$entry)
+            $entry = $this->parse_third_party_field_types($entry);
+
+        return $entries;
+    }
+
+    /**
+     * @param $entry
+     * @return mixed
+     */
+    private function parse_third_party_field_types($entry)
+    {
+        foreach ($entry as $field => &$value) {
+            if ($this->is_matrix_field($field))
+                $entry = $this->parse_matrix_field($entry, $field, $value);
+
+            if ($this->is_playa_field($field))
+                $entry = $this->parse_playa_field($entry, $field, $value);
+
+            if ($this->is_assets_field($field))
+                $entry = $this->parse_assets_field($entry, $field, $value);
+        }
+
+        return $entry;
+    }
+
+    /**
+     * @param $field_name
+     * @return bool
+     */
+    private function is_matrix_field($field_name)
+    {
+        return (strstr($field_name, '[matrix]'))
+          ? TRUE
+          : FALSE;
+    }
+
+    /**
+     * @param $field_name
+     * @return bool
+     */
+    private function is_playa_field($field_name)
+    {
+        return (strstr($field_name, '[playa]'))
+          ? TRUE
+          : FALSE;
+    }
+
+    /**
+     * @param $field_name
+     * @return bool
+     */
+    private function is_assets_field($field_name)
+    {
+        return (strstr($field_name, '[assets]'))
+          ? TRUE
+          : FALSE;
+    }
+
+    /**
+     * @param $source
+     * @param $key
+     * @param $field_value
+     * @return mixed
+     */
+    private function parse_matrix_field($source, $key, $field_value)
+    {
+        $real_row_key = substr($key, 0, - 8);
+        $matrix_data = $this->EE->channel_data->get_matrix_data($field_value, $source['entry_id']);
+
+        foreach ($matrix_data as &$matrix_row) {
+            $matrix_row = $this->parse_third_party_field_types($matrix_row);
+        }
+
+        $source[$real_row_key] = $matrix_data;
+        unset($source[$key]);
+
+        return $source;
+    }
+
+    /**
+     * @param $source
+     * @param $key
+     * @param $field_value
+     * @return mixed
+     */
+    private function parse_playa_field($source, $key, $field_value)
+    {
+        $new_value = $field_value;
+        $entry_ids = $this->extract_ids_from_playa_field_value($field_value);
+
+        if (! empty($entry_ids))
+            $new_value = $this->fetch_entries_by_ids($entry_ids);
+
+        $source[substr($key, 0, - 7)] = $new_value;
+        unset($source[$key]);
+
+        return $source;
+    }
+
+    private function parse_assets_field($source, $key, $field_value)
+    {
+        $assets_array = array_filter(preg_split('/[\r\n]/', $field_value));
+
+        if (! empty($assets_array))
+            foreach ($assets_array as &$asset)
+                $asset = $this->parse_file_dir($asset);
+
+        $source[substr($key, 0, -8)] = $assets_array;
+        unset($source[$key]);
+
+        return $source;
+    }
+
+
+    private function parse_file_dir($asset)
+    {
+        require_once PATH_THIRD.'assets/helper.php';
+        $helper = get_assets_helper();
+
+        $helper->parse_filedir_path($asset, $file_dir, $file);
+
+        return $file_dir->url . $file;
+    }
+
+    /**
+     * @param string $field_value The current value for the field from channel_data
+     * @return array
+     */
+    private function extract_ids_from_playa_field_value($field_value)
+    {
+        $entry_ids = array();
+
+        if (preg_match_all("/\\[(\\d+)\\]/ui", $field_value, $matches) > 0)
+            $entry_ids = $matches[1];
+
+        return $entry_ids;
+    }
+
+    /**
+     * @param array $input_data
+     * @return string
+     */
+    public function channel_post($input_data = NULL)
+    {
+        $fields = $this->EE->channel_data
+          ->get_channel_fields($this->channel->channel_id)
+          ->result_array();
+
+        if (! is_array($input_data))
+            $input_data = $_POST;
+
+        if (! $this->is_valid_post_request($fields, $input_data))
+            $this->EE->error_response
+              ->set_http_response_code(400)
+              ->set_error($this->EE->lang->line('error_generic'));
+
+        $data = $this->build_entry_data($fields, $input_data);
+
+        $this->EE->api_channel_fields->setup_entry_settings($this->channel->channel_id, $data);
+
+        if ($this->EE->api_channel_entries->submit_new_entry($this->channel->channel_id, $data))
+            return $this->EE->api_channel_entries->entry_id;
+
+        else
+            $this->EE->error_response
+              ->set_http_response_code(400)
+              ->set_error($this->EE->lang->line('error_generic'));
+    }
+
+    /**
+     * @param $fields
+     * @param array $input_data
+     * @return array
+     */
+    private function build_entry_data($fields, $input_data)
+    {
+        $data = array();
+        $data['title'] = $input_data['title'];
+        $data['author'] = $input_data['author'];
+        $data['entry_date'] = $this->EE->localize->now;
+
+        foreach ($fields as $field) {
+            if ($input_data[$field['field_name']])
+                $data['field_id_' . $field['field_id']] = $input_data[$field['field_name']];
+        }
+
+        return $data;
+    }
+
+    /**
+     * @param array $input_data
+     * @return void
+     */
+    public function channel_put($input_data = NULL)
+    {
+        $fields = $this->EE->channel_data
+          ->get_channel_fields($this->channel->channel_id)
+          ->result_array();
+
+        if (! is_array($input_data))
+            parse_str(file_get_contents('php://input'), $input_data);
+
+        if (! $this->is_valid_put_request($fields, $this->entry_id, $input_data))
+            return;
+
+        $data = $this->build_entry_data($fields, $input_data);
+
+        $data['channel_id'] = $this->channel->channel_id;
+        $data['entry_date'] = $this->EE->localize->now;
+
+        if ($this->update_entry($this->entry_id, $this->channel->channel_id, $data))
+            $this->return_data['results'] = $this->entry_id;
+
+        else
+            $this->EE->error_response
+              ->set_http_response_code(400)
+              ->set_error($this->EE->lang->line('error_generic'));
+    }
+
+    /**
+     * @param $entry_id
+     * @param $channel_id
+     * @param $data
+     * @return bool
+     */
+    private function update_entry($entry_id, $channel_id, $data)
+    {
+        $this->EE->api_channel_fields->setup_entry_settings($channel_id, $data);
+        return $this->EE->api_channel_entries->update_entry(intval($entry_id), $data);
+    }
+
+    /**
+     * @return void
+     */
+    public function channel_delete()
+    {
+        if (! $this->is_valid_delete_request($this->entry_id))
+            return;
+
+        $delete_entry = $this->EE->api_channel_entries->delete_entry($this->entry_id);
+        if ($delete_entry)
+            $this->return_data['results'] = $this->entry_id;
+
+        else
+            $this->EE->error_response
+              ->set_http_response_code(400)
+              ->set_error($this->EE->lang->line('error_generic'));
+    }
+
+    /**
+     * @return bool
+     */
+    private function is_valid_get_request()
+    {
+        if ($this->is_valid_channel())
+            return TRUE;
+
+        return FALSE;
+    }
+
+    /**
+     * @param array $fields
+     * @param array $input_data
+     * @return bool
+     */
+    private function is_valid_post_request($fields, $input_data)
+    {
+        if ($this->is_valid_channel()
+          AND $this->is_valid_field_requirements($fields, $input_data))
+            return TRUE;
+
+        else return FALSE;
+    }
+
+    /**
+     * @param array $fields
+     * @param $entry_id
+     * @param $data
+     * @return bool
+     */
+    private function is_valid_put_request($fields, $entry_id, $data)
+    {
+        if ($this->is_valid_channel()
+          AND $this->is_valid_entry_id($entry_id)
+            AND $this->is_valid_field_requirements($fields, $data)
+        )
+            return TRUE;
+
+        else return FALSE;
+    }
+
+    /**
+     * @param $entry_id
+     * @return bool
+     */
+    private function is_valid_delete_request($entry_id)
+    {
+        if ($this->is_valid_entry_id($entry_id))
+            return TRUE;
+
+        else return FALSE;
+    }
+
+    /**
+     * @return bool
+     */
+    private function is_valid_channel()
+    {
+        if ($this->channel_exists())
+            return TRUE;
+
+        else {
+            $this->EE->error_response
+              ->set_http_response_code(400)
+              ->set_error($this->EE->lang->line('error_no_channel'));
+
+            return FALSE;
+        }
+    }
+
+    /**
+     * @param int $entry_id
+     * @return bool
+     */
+    private function is_valid_entry_id($entry_id)
+    {
+        $entry = $this->EE->channel_data
+          ->get_channel_entry_in_channel($entry_id, $this->channel->channel_id)
+          ->row_array();
+
+        if (! empty($entry))
+            return TRUE;
+
+        else {
+            $this->EE->error_response
+              ->set_http_response_code(400)
+              ->set_error($this->EE->lang->line('error_no_entry'));
+
+            return FALSE;
+        }
+    }
+
+    /**
+     * @param array $fields
+     * @param array $input_data
+     * @return bool
+     */
+    private function is_valid_field_requirements($fields, $input_data)
+    {
+        foreach ($fields as $field) {
+            if ($field['field_required'] == 'y') {
+                if (! $input_data[$field['field_name']]) {
+                    $this->EE->error_response
+                      ->set_http_response_code(400)
+                      ->set_error($this->EE->lang->line('error_required_fields'));
+
+                    return FALSE;
+                }
+            }
+        }
+
+        return TRUE;
+    }
+}
+/* End of file api_model.php */
