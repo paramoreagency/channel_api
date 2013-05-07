@@ -908,6 +908,10 @@ if (! class_exists('Channel_data_lib')) {
                             $select[] = 'field_id_' . $field->field_id . ' as \'' . $field->field_name . '[assets]\'';
                             break;
 
+                        case 'zoo_visitor':
+                            $select[] = 'field_id_' . $field->field_id . ' as \'' . $field->field_name . '[zoo_visitor]\'';
+                            break;
+
                         default:
                             $select[] = 'field_id_' . $field->field_id . ' as \'' . $field->field_name . '\'';
                             break;
@@ -970,31 +974,38 @@ if (! class_exists('Channel_data_lib')) {
         /**
          * @param $field_id
          * @param $entry_id
+         * @param $order_by
+         * @param $sort
          * @return mixed
          */
-        public function get_matrix_data($field_id, $entry_id)
+        public function get_matrix_data($field_id, $entry_id, $order_by = 'row_order', $sort = 'asc')
         {
+            if (empty($field_id) OR empty($entry_id))
+                return array();
+
             $columns = $this->get_matrix_cols($field_id)->result();
-            $select = array();
+            $select = array('row_id');
+            $params = array(
+                'select'   => $select,
+                'where'    => array(
+                    'matrix_data.entry_id' => $entry_id,
+                    'matrix_data.field_id' => $field_id
+                ),
+                'order_by' => 'row_order',
+                'sort'     => $sort
+            );
 
             foreach ($columns as $column) {
                 if ($column->col_type == 'playa')
                     $select[] = '`col_id_' . $column->col_id . '` as \'' . $column->col_name . '[playa]\'';
                 else
                     $select[] = '`col_id_' . $column->col_id . '` as \'' . $column->col_name . '\'';
+
+                if ($column->col_name == $order_by)
+                    $params['order_by'] = 'col_id_' . $column->col_id;
             }
 
-            $where = array(
-                'matrix_data.entry_id' => $entry_id,
-                'matrix_data.field_id' => $field_id
-            );
-
-            $params = array(
-                'select'   => $select,
-                'where'    => $where,
-                'order_by' => 'row_order',
-                'sort'     => 'asc'
-            );
+            $params['select'] = $select;
 
             $this->convert_params($params, FALSE, FALSE, FALSE, FALSE, FALSE, FALSE);
 
