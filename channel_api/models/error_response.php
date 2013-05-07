@@ -65,7 +65,10 @@ class Error_response {
      */
     public function send_error_response()
     {
-        http_response_code($this->http_response_code);
+        if (function_exists('http_response_code'))
+            http_response_code($this->http_response_code);
+        else
+            header(':', true, $this->http_response_code);
 
         if (count($this->errors) > 0)
             return $this->errors;
