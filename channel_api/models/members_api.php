@@ -145,9 +145,20 @@ Class Members_api
 
         $query = $this->EE->db->query($sql);
 
-        return ($query->num_rows() > 0)
-          ? $query->row_array()
-          : NULL;
+        if ($query->num_rows() > 0) {
+            $member = $query->row_array();
+
+            // ----------------------------------
+            // Hook: channel_api_member_lookup_end
+            // Do additional processing on the member before returning it.
+            if ($this->EE->extensions->active_hook('channel_api_member_lookup_end') === TRUE)
+                $member = $this->EE->extensions->call('channel_api_member_lookup_end', $member);
+
+            return $member;
+
+        } else {
+            return NULL;
+        }
     }
 
     public function create_member($data)
