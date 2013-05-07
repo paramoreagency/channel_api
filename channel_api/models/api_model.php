@@ -14,6 +14,9 @@
 
 class Api_model
 {
+    /**
+     * @var CI_Controller
+     */
     public $EE;
 
     /**
@@ -88,6 +91,23 @@ class Api_model
     }
 
     /**
+     * @param int $channel_id
+     * @return int
+     */
+    public function count_entries_in_channel($channel_id = NULL)
+    {
+        if (is_null($channel_id))
+            $channel_id = $this->channel->channel_id;
+
+        return $this->EE->db
+          ->query(
+              "SELECT COUNT(*) AS count
+             FROM `exp_channel_titles` 
+             WHERE `channel_id` = {$channel_id}")
+          ->row('count');
+    }
+
+    /**
      * @return bool
      */
     private function channel_exists()
@@ -102,11 +122,7 @@ class Api_model
     public function channel_get()
     {
         if ($this->field)
-            return $this->fetch_related_entries(
-                $this->channel,
-                $this->entry_id,
-                $this->channel . '_' . $this->field
-            );
+            return $this->fetch_entry_field();
 
         elseif ($this->entry_id)
             return $this->fetch_entry($this->entry_id);
@@ -116,6 +132,35 @@ class Api_model
 
         else
             throw new Exception($this->EE->lang->line('error_no_channel'), 400);
+    }
+
+    private function fetch_entry_field()
+    {
+        $field = $this->EE->channel_data->get_field_by_name($this->field)->row();
+
+        switch ($field->field_type) {
+            case 'matrix':
+                $result = $this->EE->channel_data->get_matrix_data(
+                    $field->field_id,
+                    $this->entry_id,
+                    $this->params['order_by'],
+                    $this->params['sort']
+                );
+
+                foreach ($result as &$row) {
+                    $row = $this->parse_third_party_field_types($row);
+                }
+
+                break;
+            case 'playa':
+                $result = $this->fetch_related_entries();
+                break;
+            default:
+                $entry = $this->fetch_entry($this->entry_id);
+                $result = $entry[$this->field];
+        }
+
+        return $result;
     }
 
     /**
@@ -181,38 +226,50 @@ class Api_model
         if (empty($entry_ids)) return array();
 
         $fields = $this->get_fields_by_site();
-        $fields_array = array();
+        $params = array();
+
+        if ($this->params['order_by'] == 'entry_id')
+            $params['order_by'] = 'entry_id';
 
         $select = array(
-            'exp_channel_titles.entry_id',
-            'exp_channel_titles.channel_id',
-            'exp_channel_titles.title',
-            'exp_channel_titles.url_title',
-            'exp_channel_titles.entry_date',
-            'exp_channel_titles.author_id'
+            'titles.entry_id',
+            'titles.channel_id',
+            'titles.title',
+            'titles.url_title',
+            'titles.entry_date',
+            'titles.author_id'
         );
 
         foreach ($fields as $field) {
             if ($field->field_type == "matrix")
-                $select[] = 'exp_channel_data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '[matrix]\'';
+                $select[] = 'data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '[matrix]\'';
             elseif ($field->field_type == "playa")
-                $select[] = 'exp_channel_data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '[playa]\'';
+                $select[] = 'data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '[playa]\'';
+            elseif ($field->field_type == "assets")
+                $select[] = 'data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '[assets]\'';
             else
-                $select[] = 'exp_channel_data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '\'';
+                $select[] = 'data.field_id_' . $field->field_id . ' as \'' . $field->field_name . '\'';
 
-            $fields_array[$field->field_name] = 'field_id_' . $field->field_id;
+            if ($this->params['order_by'] == $field->field_name)
+                $params['order_by'] = $field->field_name;
         }
 
         $sql  = 'SELECT ' . implode(', ', $select) . ' '
-          . 'FROM exp_channel_titles '
-          . 'JOIN exp_channel_data ON exp_channel_data.entry_id = exp_channel_titles.entry_id '
-          . 'WHERE exp_channel_data.entry_id IN (' . implode(', ', $entry_ids) . ')'
-          . (($this->params['order_by']) ? ' ORDER BY ' . $this->params['order_by'] : '')
+          . 'FROM exp_channel_titles titles '
+          . 'JOIN exp_channel_data data ON data.entry_id = titles.entry_id '
+          . 'WHERE data.entry_id IN (' . implode(', ', $entry_ids) . ')'
+          . (($params['order_by']) ? ' ORDER BY ' . $params['order_by'] : '')
           . (($this->params['limit']) ? ' LIMIT ' . $this->params['limit'] : '');
 
         $query = $this->EE->db->query($sql);
 
-        return $query->result_array();
+        $entries = $query->result_array();
+
+        foreach ($entries as &$entry) {
+            $entry = $this->parse_third_party_field_types($entry);
+        }
+
+        return $entries;
     }
 
     /**
@@ -265,6 +322,9 @@ class Api_model
 
             if ($this->is_assets_field($field))
                 $entry = $this->parse_assets_field($entry, $field, $value);
+
+            if ($this->is_zoo_visitor_field($field))
+                $entry = $this->parse_zoo_visitor_field($entry, $field, $value);
         }
 
         return $entry;
@@ -303,6 +363,28 @@ class Api_model
           : FALSE;
     }
 
+    private function is_zoo_visitor_field($field_name)
+    {
+        return (strstr($field_name, '[zoo_visitor]'))
+          ? TRUE
+          : FALSE;
+    }
+
+    private function parse_zoo_visitor_field($source, $key, $field_value)
+    {
+        $select = array('member_id', 'group_id', 'username', 'screen_name', 'email');
+        $member = $this->EE->db
+          ->select(implode(', ', $select))
+          ->where('member_id', $field_value)
+          ->get('members', 1)
+          ->row_array();
+
+        $source[substr($key, 0, - 13)] = $member;
+        unset($source[$key]);
+
+        return $source;
+    }
+
     /**
      * @param $source
      * @param $key
@@ -312,7 +394,12 @@ class Api_model
     private function parse_matrix_field($source, $key, $field_value)
     {
         $real_row_key = substr($key, 0, - 8);
-        $matrix_data = $this->EE->channel_data->get_matrix_data($field_value, $source['entry_id']);
+        $matrix_data = $this->EE->channel_data->get_matrix_data(
+            $field_value,
+            $source['entry_id'],
+            $this->params['order_by'],
+            $this->params['sort']
+        );
 
         foreach ($matrix_data as &$matrix_row) {
             $matrix_row = $this->parse_third_party_field_types($matrix_row);
@@ -358,7 +445,6 @@ class Api_model
         return $source;
     }
 
-
     private function parse_file_dir($asset)
     {
         require_once PATH_THIRD.'assets/helper.php';
@@ -393,13 +479,26 @@ class Api_model
           ->get_channel_fields($this->channel->channel_id)
           ->result_array();
 
-        if (! is_array($input_data))
-            $input_data = $_POST;
+        if (! is_array($input_data)) {
+            parse_str(file_get_contents('php://input'), $input_data);
+            $_POST = $input_data;
+        }
 
         if (! $this->is_valid_post_request($fields, $input_data))
             $this->EE->error_response
               ->set_http_response_code(400)
               ->set_error($this->EE->lang->line('error_generic'));
+
+        if ($this->EE->extensions->active_hook('channel_api_post_ready') === TRUE) 
+		{
+			$hook_result = $this->EE->extensions->call('channel_api_post_ready', $input_data);
+			if($hook_result !== TRUE)
+			{
+	            $this->EE->error_response
+	              ->set_http_response_code(400)
+	              ->set_error($hook_result);
+			}
+        }
 
         $data = $this->build_entry_data($fields, $input_data);
 
@@ -421,9 +520,10 @@ class Api_model
      */
     private function build_entry_data($fields, $input_data)
     {
-        $data = array();
-        $data['title'] = $input_data['title'];
-        $data['author'] = $input_data['author'];
+        $data = ($this->entry_id)
+          ? array_merge($this->fetch_entry($this->entry_id), $input_data)
+          : $input_data;
+        
         $data['entry_date'] = $this->EE->localize->now;
 
         foreach ($fields as $field) {
@@ -449,6 +549,8 @@ class Api_model
 
         if (! $this->is_valid_put_request($fields, $this->entry_id, $input_data))
             return;
+
+        $_POST = $input_data; // hack.
 
         $data = $this->build_entry_data($fields, $input_data);
 

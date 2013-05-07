@@ -70,6 +70,19 @@ class Channel_api
      */
     protected $verb;
 
+	/**
+	 * @var string
+	 */
+	protected $auth_config_req_type = 'blacklist'; /* <blacklist|whitelist> */
+	
+	/**
+	 * @var array
+	 * Case-sensitive
+	 */
+	protected $auth_config_channels = array(
+		'members' => array('post')
+	);
+
     /**
      * Constructor
      */
@@ -110,7 +123,7 @@ class Channel_api
     private function set_response_headers()
     {
         $this->EE->output->set_header('Content-Type: application/json; charset=utf-8');
-        $this->EE->output->set_header('Access-Control-Allow-Origin: http://app.moreys.dev');
+        $this->EE->output->set_header('Access-Control-Allow-Origin: ' . $_SERVER['HTTP_ORIGIN']);
         $this->EE->output->set_header('Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD, OPTIONS');
         $this->EE->output->set_header('Access-Control-Allow-Headers: Authorization, X-Requested-With, Origin, Content-Type, Accept, '
           . $this->service_header . ', ' . $this->token_header);
@@ -153,11 +166,20 @@ class Channel_api
         try{
             $auth_service = $this->EE->auth_factory->instantiate_service($service);
             $member = $auth_service->authenticate($username, $password);
-            if (! is_null($member['token']))
-                $this->return_data['results'] = array(
+            if (! is_null($member['token'])) {
+                $data = array(
                     'api_token' => $member['token'],
                     'auth_service' => $service
                 );
+
+                // ----------------------------------
+                // Hook: channel_api_auth_login_end
+                // Do additional processing on the return data.
+                if ($this->EE->extensions->active_hook('channel_api_auth_login_end') === TRUE)
+                    $data = $this->EE->extensions->call('channel_api_auth_login_end', $data, $member);
+
+                $this->return_data['results'] = $data;
+            }
 
         } catch(Exception $e) {
             $this->EE->error_response
@@ -221,6 +243,8 @@ class Channel_api
      */
     private function authenticate_request()
     {
+		if(! $this->authentication_required()) return TRUE;
+	
         $auth_service_name = $this->get_auth_service();
         $token = $this->get_access_token();
 
@@ -243,6 +267,34 @@ class Channel_api
 
         return FALSE;
     }
+
+	/**
+	 * @return boolean 
+	 */
+	private function authentication_required()
+	{
+		$request_in_config = (bool) ( 
+			isset($this->auth_config_channels[$this->EE->uri->segment(1)]) && 
+			in_array($this->verb, $this->auth_config_channels[$this->EE->uri->segment(1)])
+		);
+
+		switch( $this->auth_config_req_type )
+		{
+			/* incoming route must be in list to require auth */
+			case 'whitelist':
+				return $request_in_config ? TRUE : FALSE;
+				break;
+
+			/* having this as the default will, by default, require all requests to be auth'd */
+			case 'blacklist':
+			default:
+				/* incoming routes NOT in config require auth */
+				return $request_in_config ? FALSE : TRUE;
+			
+		}
+		
+		return TRUE;
+	}
 
     /**
      * @return void
@@ -267,6 +319,7 @@ class Channel_api
         if (! empty($_GET))
             $this->EE->api_model->set_params($_GET);
 
+        $this->return_data['total_records_in_channel'] = $this->EE->api_model->count_entries_in_channel();
         $this->return_data['results'] = $this->EE->api_model->$method();
     }
 
