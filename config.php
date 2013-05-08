@@ -36,7 +36,7 @@ class Channel_api_config {
      * Case-sensitive
      */
     public $auth_channels = array(
-        'members' => array('post')
+        'photos' => array('post', 'get')
     );
 
 }
