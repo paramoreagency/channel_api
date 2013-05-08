@@ -80,8 +80,7 @@ class Channel_api
 	 * Case-sensitive
 	 */
 	protected $auth_config_channels = array(
-		'members' => array('post'),
-        'assets' => array('post')
+		'members' => array('post')
 	);
 
     /**
@@ -124,7 +123,8 @@ class Channel_api
     private function set_response_headers()
     {
         $this->EE->output->set_header('Content-Type: application/json; charset=utf-8');
-        $this->EE->output->set_header('Access-Control-Allow-Origin: ' . $_SERVER['HTTP_ORIGIN']);
+        $allow_origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '*'; /* "*" not preferred, but OK for fallback */
+        $this->EE->output->set_header('Access-Control-Allow-Origin: ' . $allow_origin);
         $this->EE->output->set_header('Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD, OPTIONS');
         $this->EE->output->set_header('Access-Control-Allow-Headers: Authorization, X-Requested-With, Origin, Content-Type, Accept, '
           . $this->service_header . ', ' . $this->token_header);
@@ -179,6 +179,19 @@ class Channel_api
     	}
     	else
     	{
+    		/* create new asset entry */
+    		$this->EE->api_model->set_channel($this->EE->input->post('channel_name'));
+    		$entry_id = $this->EE->api_model->channel_post(
+    			array(
+    				'title' => 'Test Photo Upload',
+    				'photo' => 'testfile.jpg',
+    				'status' => 'open',
+    				'photo_member_id' => 45,
+    				'author_id' => 45
+    			)
+    		);
+
+    		/* set response data */
     		$this->return_data = array_merge(
     			$result['upload_result_data'],
     			array('base_url' => $upload_dir['url'])
