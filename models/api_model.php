@@ -209,6 +209,13 @@ class Api_model
         if (! empty($entry))
             $result = $this->parse_third_party_field_types($entry);
 
+        // -------------------------------------------
+        // HOOK: channel_api_fetch_entry_end
+        // -------------------------------------------
+        if ($this->EE->extensions->active_hook('channel_api_fetch_entry_end') === TRUE) {
+            $result = $this->EE->extensions->call('channel_api_fetch_entry_end', $entry_id, $result);
+        }
+
         else
             $this->EE->error_response
               ->set_http_response_code(400)
@@ -455,6 +462,24 @@ class Api_model
         return $file_dir->url . $file;
     }
 
+    public function get_upload_path($upload_pref_id=0)
+    {
+    	$this->EE->db->select('server_path');
+    	$this->EE->db->where('id', $upload_pref_id);
+		$this->EE->db->limit(1);
+    	$query = $this->EE->db->get('upload_prefs');
+
+    	if($query->num_rows()) 
+    	{
+    		$row = current($query->result_array());
+    		return $row['server_path'];
+    	}
+    	else
+    	{
+    		return null;
+    	}
+    }
+
     /**
      * @param string $field_value The current value for the field from channel_data
      * @return array
@@ -664,6 +689,45 @@ class Api_model
               ->set_error($this->EE->lang->line('error_generic'));
 
         return FALSE;
+    }
+
+    /**
+     * @return void
+     */
+    public function upload_to_assets($upload_opts=array())
+    {
+		/* upload photo */
+		$this->EE->load->library(
+			'upload', 
+			array_merge(
+				array(
+					'upload_path'   => null, /* must be set in $upload_opts */
+					'allowed_types' => 'jpg|gif|png',
+					'file_name'		=> '',
+					'overwrite'     => FALSE,
+					'max_size'      => '500', /* .5MB */
+					'encrypt_name'	=> FALSE,
+					'remove_spaces'	=> TRUE
+				),
+				$upload_opts
+			)
+		);
+
+		$this->EE->upload->do_upload('file');
+
+		/* there was an error in the file upload */
+		if($error_message = strip_tags($this->EE->upload->display_errors()))
+		{
+			$this->EE->error_response
+				->set_http_response_code(400)
+				->set_error($error_message);
+		}
+		else 
+		{
+			$this->return_data = $this->EE->upload->data();
+		}
+
+		return;
     }
 
     /**

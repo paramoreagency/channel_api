@@ -58,7 +58,7 @@ class Channel_api
     /**
      * @var string
      */
-    private $uploads_keyword = 'assets';
+    private $assets_keyword = 'assets';
 
     /**
      * @var string
@@ -74,13 +74,14 @@ class Channel_api
 	 * @var string
 	 */
 	protected $auth_config_req_type = 'blacklist'; /* <blacklist|whitelist> */
-	
+
 	/**
 	 * @var array
 	 * Case-sensitive
 	 */
 	protected $auth_config_channels = array(
-		'members' => array('post')
+		'members' => array('post'),
+        'assets' => array('post')
 	);
 
     /**
@@ -141,9 +142,9 @@ class Channel_api
                 $this->login_member();
                 break;
 
-            case $this->uploads_keyword:
-//                if ($this->authenticate_request())
-//                    $this->upload_to_assets();
+            case $this->assets_keyword:
+                if ($this->authenticate_request())
+                    $this->upload_to_assets();
                 break;
 
             default:
@@ -152,6 +153,23 @@ class Channel_api
 
                 break;
         }
+    }
+
+    /**
+     * @return void
+     */
+    private function upload_to_assets()
+    {
+    	/* perform upload */
+    	$upload_opts = array(
+    		'upload_path' => $this->EE->api_model->get_upload_path(
+    			$this->EE->input->post('upload_path_id')
+    		)
+		);
+
+    	$this->return_data = $this->EE->api_model->upload_to_assets($upload_opts);
+
+		return;
     }
 
     /**
