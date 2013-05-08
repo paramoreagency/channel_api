@@ -25,8 +25,6 @@
  * @since       EE Version 2.2.0
  */
 
-require_once "config.php";
-
 class Channel_api
 {
     /**
@@ -72,18 +70,24 @@ class Channel_api
      */
     protected $verb;
 
-    /**
-     * @var Channel_api_config
-     */
-    protected $channel_api_config;
+	/**
+	 * @var string
+	 */
+	protected $auth_config_req_type = 'blacklist'; /* <blacklist|whitelist> */
+	
+	/**
+	 * @var array
+	 * Case-sensitive
+	 */
+	protected $auth_config_channels = array(
+		'members' => array('post')
+	);
 
     /**
      * Constructor
      */
     public function __construct()
     {
-        $this->channel_api_config = new Channel_api_config();
-
         $this->EE =& get_instance();
         $this->EE->lang->loadfile('channel_api');
         $this->EE->load->driver('auth_factory');
@@ -270,11 +274,11 @@ class Channel_api
 	private function authentication_required()
 	{
 		$request_in_config = (bool) ( 
-			isset($this->channel_api_config->auth_channels[$this->EE->uri->segment(1)]) &&
-			in_array($this->verb, $this->channel_api_config->auth_channels[$this->EE->uri->segment(1)])
+			isset($this->auth_config_channels[$this->EE->uri->segment(1)]) && 
+			in_array($this->verb, $this->auth_config_channels[$this->EE->uri->segment(1)])
 		);
 
-		switch( $this->channel_api_config->auth_req_type )
+		switch( $this->auth_config_req_type )
 		{
 			/* incoming route must be in list to require auth */
 			case 'whitelist':
