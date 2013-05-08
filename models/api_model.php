@@ -462,18 +462,16 @@ class Api_model
         return $file_dir->url . $file;
     }
 
-    public function get_upload_path($upload_pref_id=0)
+    public function get_upload_dir($upload_pref_id=0)
     {
-    	$this->EE->db->select('server_path');
     	$this->EE->db->where('id', $upload_pref_id);
 		$this->EE->db->limit(1);
     	$query = $this->EE->db->get('upload_prefs');
 
     	if($query->num_rows()) 
     	{
-    		$row = current($query->result_array());
-    		return $row['server_path'];
-    	}
+    		return current($query->result_array());
+    	}	 
     	else
     	{
     		return null;
@@ -692,7 +690,7 @@ class Api_model
     }
 
     /**
-     * @return void
+     * @return array
      */
     public function upload_to_assets($upload_opts=array())
     {
@@ -718,13 +716,17 @@ class Api_model
 		/* there was an error in the file upload */
 		if($error_message = strip_tags($this->EE->upload->display_errors()))
 		{
-			$this->EE->error_response
-				->set_http_response_code(400)
-				->set_error($error_message);
+			return array(
+				'success' => FALSE,
+				'error_message' => $error_message
+			);
 		}
 		else 
 		{
-			$this->return_data = $this->EE->upload->data();
+			return array(
+				'success' => TRUE,
+				'upload_result_data' => $this->EE->upload->data()
+			);
 		}
 
 		return;

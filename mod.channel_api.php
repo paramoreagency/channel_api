@@ -160,14 +160,30 @@ class Channel_api
      */
     private function upload_to_assets()
     {
-    	/* perform upload */
-    	$upload_opts = array(
-    		'upload_path' => $this->EE->api_model->get_upload_path(
-    			$this->EE->input->post('upload_path_id')
-    		)
-		);
+    	/* get upload dir */
+		$upload_dir = $this->EE->api_model->get_upload_dir(
+    		$this->EE->input->post('upload_path_id')
+    	);
 
-    	$this->return_data = $this->EE->api_model->upload_to_assets($upload_opts);
+    	/* perform upload */
+    	$result = $this->EE->api_model->upload_to_assets(
+    		array('upload_path' => $upload_dir['server_path'])
+    	);
+
+    	/* set response */
+    	if($result['success'] !== TRUE)
+    	{
+			$this->EE->error_response
+				->set_http_response_code(400)
+				->set_error($result['error_message']);
+    	}
+    	else
+    	{
+    		$this->return_data = array_merge(
+    			$result['upload_result_data'],
+    			array('base_url' => $upload_dir['url'])
+    		);
+    	}	
 
 		return;
     }
