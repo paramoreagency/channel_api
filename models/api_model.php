@@ -209,6 +209,13 @@ class Api_model
         if (! empty($entry))
             $result = $this->parse_third_party_field_types($entry);
 
+        // -------------------------------------------
+        // HOOK: channel_api_fetch_entry_end
+        // -------------------------------------------
+        if ($this->EE->extensions->active_hook('channel_api_fetch_entry_end') === TRUE) {
+            $result = $this->EE->extensions->call('channel_api_fetch_entry_end', $entry_id, $result);
+        }
+
         else
             $this->EE->error_response
               ->set_http_response_code(400)
@@ -455,6 +462,22 @@ class Api_model
         return $file_dir->url . $file;
     }
 
+    public function get_upload_dir($upload_pref_id=0)
+    {
+    	$this->EE->db->where('id', $upload_pref_id);
+		$this->EE->db->limit(1);
+    	$query = $this->EE->db->get('upload_prefs');
+
+    	if($query->num_rows()) 
+    	{
+    		return current($query->result_array());
+    	}	 
+    	else
+    	{
+    		return null;
+    	}
+    }
+
     /**
      * @param string $field_value The current value for the field from channel_data
      * @return array
@@ -475,6 +498,13 @@ class Api_model
      */
     public function channel_post($input_data = NULL)
     {
+        // -------------------------------------------
+        // HOOK: channel_api_post_start
+        // -------------------------------------------
+        if ($this->EE->extensions->active_hook('channel_api_post_start') === TRUE) {
+            $input_data = $this->EE->extensions->call('channel_api_post_start', $input_data);
+        }
+
         $fields = $this->EE->channel_data
           ->get_channel_fields($this->channel->channel_id)
           ->result_array();
@@ -489,14 +519,18 @@ class Api_model
               ->set_http_response_code(400)
               ->set_error($this->EE->lang->line('error_generic'));
 
-        if ($this->EE->extensions->active_hook('channel_api_post_ready') === TRUE) 
-		{
+        // -------------------------------------------
+        // HOOK: channel_api_post_ready
+        // -------------------------------------------
+        if ($this->EE->extensions->active_hook('channel_api_post_ready') === TRUE) {
 			$hook_result = $this->EE->extensions->call('channel_api_post_ready', $input_data);
-			if($hook_result !== TRUE)
-			{
+
+            if ($hook_result !== TRUE) {
 	            $this->EE->error_response
 	              ->set_http_response_code(400)
 	              ->set_error($hook_result);
+
+                return NULL;
 			}
         }
 
@@ -504,8 +538,18 @@ class Api_model
 
         $this->EE->api_channel_fields->setup_entry_settings($this->channel->channel_id, $data);
 
-        if ($this->EE->api_channel_entries->submit_new_entry($this->channel->channel_id, $data))
-            return $this->EE->api_channel_entries->entry_id;
+        if ($this->EE->api_channel_entries->submit_new_entry($this->channel->channel_id, $data)) {
+            $new_entry_id = $this->EE->api_channel_entries->entry_id;
+
+            // -------------------------------------------
+            // HOOK: channel_api_post_end
+            // -------------------------------------------
+            if ($this->EE->extensions->active_hook('channel_api_post_end') === TRUE) {
+                $this->EE->extensions->call('channel_api_post_end', $new_entry_id);
+            }
+
+            return $new_entry_id;
+        }
 
         else
             $this->EE->error_response
@@ -536,10 +580,17 @@ class Api_model
 
     /**
      * @param array $input_data
-     * @return void
+     * @return int
      */
     public function channel_put($input_data = NULL)
     {
+        // -------------------------------------------
+        // HOOK: channel_api_put_start
+        // -------------------------------------------
+        if ($this->EE->extensions->active_hook('channel_api_put_start') === TRUE) {
+            $input_data = $this->EE->extensions->call('channel_api_put_start', $input_data);
+        }
+
         $fields = $this->EE->channel_data
           ->get_channel_fields($this->channel->channel_id)
           ->result_array();
@@ -551,19 +602,43 @@ class Api_model
             return;
 
         $_POST = $input_data; // hack.
-
         $data = $this->build_entry_data($fields, $input_data);
-
         $data['channel_id'] = $this->channel->channel_id;
         $data['entry_date'] = $this->EE->localize->now;
 
-        if ($this->update_entry($this->entry_id, $this->channel->channel_id, $data))
-            $this->return_data['results'] = $this->entry_id;
+        // -------------------------------------------
+        // HOOK: channel_api_put_ready
+        // -------------------------------------------
+        if ($this->EE->extensions->active_hook('channel_api_put_ready') === TRUE) {
+            $hook_result = $this->EE->extensions->call('channel_api_put_ready', $this->entry_id, $input_data);
+
+            if ($hook_result !== TRUE) {
+                $this->EE->error_response
+                  ->set_http_response_code(400)
+                  ->set_error($hook_result);
+
+                return NULL;
+            }
+        }
+
+
+        if ($this->update_entry($this->entry_id, $this->channel->channel_id, $data)) {
+            // -------------------------------------------
+            // HOOK: channel_api_put_end
+            // -------------------------------------------
+            if ($this->EE->extensions->active_hook('channel_api_put_end') === TRUE) {
+                $this->EE->extensions->call('channel_api_put_end', $this->entry_id);
+            }
+
+            return $this->entry_id;
+        }
 
         else
             $this->EE->error_response
               ->set_http_response_code(400)
               ->set_error($this->EE->lang->line('error_generic'));
+
+        return FALSE;
     }
 
     /**
@@ -579,21 +654,82 @@ class Api_model
     }
 
     /**
-     * @return void
+     * @return int
      */
     public function channel_delete()
     {
+        // -------------------------------------------
+        // HOOK: channel_api_delete_start
+        // -------------------------------------------
+        if ($this->EE->extensions->active_hook('channel_api_delete_start') === TRUE) {
+            $this->EE->extensions->call('channel_api_delete_start', $this->entry_id);
+        }
+
         if (! $this->is_valid_delete_request($this->entry_id))
-            return;
+            return NULL;
 
         $delete_entry = $this->EE->api_channel_entries->delete_entry($this->entry_id);
-        if ($delete_entry)
-            $this->return_data['results'] = $this->entry_id;
+
+        if ($delete_entry) {
+            // -------------------------------------------
+            // HOOK: channel_api_delete_end
+            // -------------------------------------------
+            if ($this->EE->extensions->active_hook('channel_api_delete_end') === TRUE) {
+                $this->EE->extensions->call('channel_api_delete_end', $this->entry_id);
+            }
+
+            return $this->entry_id;
+        }
 
         else
             $this->EE->error_response
               ->set_http_response_code(400)
               ->set_error($this->EE->lang->line('error_generic'));
+
+        return FALSE;
+    }
+
+    /**
+     * @return array
+     */
+    public function upload_to_assets($upload_opts=array())
+    {
+		/* upload photo */
+		$this->EE->load->library(
+			'upload', 
+			array_merge(
+				array(
+					'upload_path'   => null, /* must be set in $upload_opts */
+					'allowed_types' => 'jpg|gif|png',
+					'file_name'		=> '',
+					'overwrite'     => FALSE,
+					'max_size'      => '500', /* .5MB */
+					'encrypt_name'	=> FALSE,
+					'remove_spaces'	=> TRUE
+				),
+				$upload_opts
+			)
+		);
+
+		$this->EE->upload->do_upload('file');
+
+		/* there was an error in the file upload */
+		if($error_message = strip_tags($this->EE->upload->display_errors()))
+		{
+			return array(
+				'success' => FALSE,
+				'error_message' => $error_message
+			);
+		}
+		else 
+		{
+			return array(
+				'success' => TRUE,
+				'upload_result_data' => $this->EE->upload->data()
+			);
+		}
+
+		return;
     }
 
     /**

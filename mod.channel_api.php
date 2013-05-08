@@ -25,8 +25,6 @@
  * @since       EE Version 2.2.0
  */
 
-require_once "config.php";
-
 class Channel_api
 {
     /**
@@ -60,7 +58,7 @@ class Channel_api
     /**
      * @var string
      */
-    private $uploads_keyword = 'assets';
+    private $assets_keyword = 'assets';
 
     /**
      * @var string
@@ -72,18 +70,24 @@ class Channel_api
      */
     protected $verb;
 
-    /**
-     * @var Channel_api_config
-     */
-    protected $channel_api_config;
+	/**
+	 * @var string
+	 */
+	protected $auth_config_req_type = 'blacklist'; /* <blacklist|whitelist> */
+
+	/**
+	 * @var array
+	 * Case-sensitive
+	 */
+	protected $auth_config_channels = array(
+		'members' => array('post')
+	);
 
     /**
      * Constructor
      */
     public function __construct()
     {
-        $this->channel_api_config = new Channel_api_config();
-
         $this->EE =& get_instance();
         $this->EE->lang->loadfile('channel_api');
         $this->EE->load->driver('auth_factory');
@@ -119,7 +123,8 @@ class Channel_api
     private function set_response_headers()
     {
         $this->EE->output->set_header('Content-Type: application/json; charset=utf-8');
-        $this->EE->output->set_header('Access-Control-Allow-Origin: ' . $_SERVER['HTTP_ORIGIN']);
+        $allow_origin = isset($_SERVER['HTTP_ORIGIN']) ? $_SERVER['HTTP_ORIGIN'] : '*'; /* "*" not preferred, but OK for fallback */
+        $this->EE->output->set_header('Access-Control-Allow-Origin: ' . $allow_origin);
         $this->EE->output->set_header('Access-Control-Allow-Methods: GET, PUT, POST, DELETE, HEAD, OPTIONS');
         $this->EE->output->set_header('Access-Control-Allow-Headers: Authorization, X-Requested-With, Origin, Content-Type, Accept, '
           . $this->service_header . ', ' . $this->token_header);
@@ -137,9 +142,9 @@ class Channel_api
                 $this->login_member();
                 break;
 
-            case $this->uploads_keyword:
-//                if ($this->authenticate_request())
-//                    $this->upload_to_assets();
+            case $this->assets_keyword:
+                if ($this->authenticate_request())
+                    $this->upload_to_assets();
                 break;
 
             default:
@@ -148,6 +153,52 @@ class Channel_api
 
                 break;
         }
+    }
+
+    /**
+     * @return void
+     */
+    private function upload_to_assets()
+    {
+    	/* get upload dir */
+		$upload_dir = $this->EE->api_model->get_upload_dir(
+    		$this->EE->input->post('upload_path_id')
+    	);
+
+    	/* perform upload */
+    	$result = $this->EE->api_model->upload_to_assets(
+    		array('upload_path' => $upload_dir['server_path'])
+    	);
+
+    	/* set response */
+    	if($result['success'] !== TRUE)
+    	{
+			$this->EE->error_response
+				->set_http_response_code(400)
+				->set_error($result['error_message']);
+    	}
+    	else
+    	{
+    		/* create new asset entry */
+    		$this->EE->api_model->set_channel($this->EE->input->post('channel_name'));
+    		$entry_id = $this->EE->api_model->channel_post(
+    			array(
+    				'title' => 'Test Photo Upload',
+    				'photo' => 'testfile.jpg',
+    				'status' => 'open',
+    				'photo_member_id' => 45,
+    				'author_id' => 45
+    			)
+    		);
+
+    		/* set response data */
+    		$this->return_data = array_merge(
+    			$result['upload_result_data'],
+    			array('base_url' => $upload_dir['url'])
+    		);
+    	}	
+
+		return;
     }
 
     /**
@@ -270,11 +321,11 @@ class Channel_api
 	private function authentication_required()
 	{
 		$request_in_config = (bool) ( 
-			isset($this->channel_api_config->auth_channels[$this->EE->uri->segment(1)]) &&
-			in_array($this->verb, $this->channel_api_config->auth_channels[$this->EE->uri->segment(1)])
+			isset($this->auth_config_channels[$this->EE->uri->segment(1)]) && 
+			in_array($this->verb, $this->auth_config_channels[$this->EE->uri->segment(1)])
 		);
 
-		switch( $this->channel_api_config->auth_req_type )
+		switch( $this->auth_config_req_type )
 		{
 			/* incoming route must be in list to require auth */
 			case 'whitelist':
