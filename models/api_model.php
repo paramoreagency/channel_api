@@ -464,18 +464,15 @@ class Api_model
 
     public function get_upload_dir($upload_pref_id=0)
     {
-    	$this->EE->db->where('id', $upload_pref_id);
-		$this->EE->db->limit(1);
-    	$query = $this->EE->db->get('upload_prefs');
+        if (! isset($this->EE->filemanager) )
+            $this->EE->load->library('filemanager');
 
-    	if($query->num_rows()) 
-    	{
-    		return current($query->result_array());
-    	}	 
-    	else
-    	{
-    		return null;
-    	}
+        $upload_dirs = $this->EE->filemanager->fetch_upload_dirs();
+
+        if ( isset($upload_dirs[$upload_pref_id]) )
+            return $upload_dirs[$upload_pref_id];
+        else
+            return null;
     }
 
     /**
@@ -692,14 +689,14 @@ class Api_model
     /**
      * @return array
      */
-    public function upload_to_assets($upload_opts=array())
+    public function upload_to_assets($upload_opts=array(), $upload_field_name="file")
     {
 		/* upload photo */
 		$this->EE->load->library(
-			'upload', 
+			'upload',
 			array_merge(
 				array(
-					'upload_path'   => null, /* must be set in $upload_opts */
+					'upload_path'   => NULL, /* must be set in $upload_opts */
 					'allowed_types' => 'jpg|gif|png',
 					'file_name'		=> '',
 					'overwrite'     => FALSE,
@@ -711,7 +708,7 @@ class Api_model
 			)
 		);
 
-		$this->EE->upload->do_upload('file');
+		$this->EE->upload->do_upload($upload_field_name);
 
 		/* there was an error in the file upload */
 		if($error_message = strip_tags($this->EE->upload->display_errors()))
